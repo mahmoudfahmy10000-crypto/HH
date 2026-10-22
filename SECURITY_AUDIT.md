@@ -1,5 +1,7 @@
 # Samsung Universal Remote 1.0.1 — security and Android audit
 
+> For version 1.2.0, [BUTTON_AUDIT.md](BUTTON_AUDIT.md) supersedes power, app-launch, diagnostics and test details. Older results below are retained as historical evidence.
+
 > Historical baseline report. For version 1.1.0, [AU7000_GUIDE.md](AU7000_GUIDE.md) supersedes the feature, permission and test summaries below: ACCESS_NETWORK_STATE is now used for VPN/lifecycle monitoring, and new VPN/keyboard tests are included. The dependency graph is unchanged.
 
 Audit date: 2026-10-22. Baseline source: `60dbb3e1292fc37d09e7832b7f0970f579b5c234`.

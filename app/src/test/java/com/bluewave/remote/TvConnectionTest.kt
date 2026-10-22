@@ -197,6 +197,107 @@ class TvConnectionTest {
         }
     }
 
+    @Test
+    fun everyCatalogKeyAndLaunchTypeTraversesMockSocketOnceAndErrorsRemainUnconfirmed() {
+        val server = MockWebServer()
+        val queue = java.util.concurrent.LinkedBlockingQueue<String>()
+        val error = CountDownLatch(1)
+        val events =
+            object : Events() {
+                override fun commandError() {
+                    error.countDown()
+                }
+            }
+        server.enqueue(
+            MockResponse()
+                .withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send("""{"event":"ms.channel.connect"}""")
+                        }
+
+                        override fun onMessage(webSocket: WebSocket, text: String) {
+                            val j = JSONObject(text)
+                            if (
+                                j.optString("method") == "ms.remote.control" ||
+                                    j.optJSONObject("params")?.optString("event") ==
+                                        "ed.apps.launch"
+                            ) {
+                                queue.put(text)
+                                webSocket.send(
+                                    """{"event":"ms.error","data":{"message":"unsupported fixture"}}"""
+                                )
+                            }
+                        }
+                    }
+                )
+        )
+        server.start(8001)
+        val c = TvConnection(Store(), events, { it == "127.0.0.1" })
+        try {
+            assertFalse(c.send("KEY_HOME"))
+            c.connect(Tv("127.0.0.1", secure = false))
+            assertTrue(events.connected.await(5, TimeUnit.SECONDS))
+            ControlCatalog.all.forEach { spec ->
+                assertTrue(c.send(spec.key))
+                assertEquals(
+                    spec.key,
+                    JSONObject(queue.poll(5, TimeUnit.SECONDS)!!)
+                        .getJSONObject("params")
+                        .getString("DataOfCmd"),
+                )
+            }
+            LaunchType.entries.forEach { type ->
+                assertTrue(c.launch("fixture-region-id", type))
+                assertEquals(
+                    type.name,
+                    JSONObject(queue.poll(5, TimeUnit.SECONDS)!!)
+                        .getJSONObject("params")
+                        .getJSONObject("data")
+                        .getString("action_type"),
+                )
+            }
+            assertTrue(error.await(5, TimeUnit.SECONDS))
+            assertNull(queue.poll(150, TimeUnit.MILLISECONDS))
+            c.disconnect()
+            assertFalse(c.send("KEY_POWER"))
+            assertFalse(c.launch("fixture"))
+            assertNull(queue.poll(150, TimeUnit.MILLISECONDS))
+        } finally {
+            c.disconnect()
+            server.close()
+        }
+    }
+
+    @Test
+    fun serverPairingTimeoutCannotAuthorizeOrPersistCredentials() {
+        val server = MockWebServer()
+        val events = Events()
+        val store = Store()
+        server.enqueue(
+            MockResponse()
+                .withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send("""{"event":"ms.channel.timeOut"}""")
+                        }
+                    }
+                )
+        )
+        server.start(8001)
+        val c = TvConnection(store, events, { it == "127.0.0.1" })
+        try {
+            c.connect(Tv("127.0.0.1", secure = false))
+            assertTrue(events.denied.await(5, TimeUnit.SECONDS))
+            assertFalse(c.ready)
+            assertNull(store.saved)
+            assertFalse(c.send("KEY_POWER"))
+        } finally {
+            c.disconnect()
+            server.close()
+        }
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun productionConnectionRejectsPublicDestinationBeforeOpeningSocket() {
         TvConnection(Store(), Events()).connect(Tv("8.8.8.8"))

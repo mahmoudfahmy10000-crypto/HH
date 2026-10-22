@@ -12,6 +12,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 data class RemoteState(
+    val diagnostics: List<DiagnosticResult> = emptyList(),
+    val power: PowerObservation = PowerObservation(),
+    val pendingPower: PowerIntent? = null,
+    val pendingTest: String? = null,
     val ir: Boolean = false,
     val hasIr: Boolean = false,
     val nec: Boolean = false,
@@ -54,6 +58,9 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     private var attempts = 0
     private var allowReconnect = true
     private val irMutex = Mutex()
+    private val powerGate = PowerGate()
+    private val sequence = java.util.concurrent.atomic.AtomicLong()
+    private var appsTimeout: Job? = null
 
     @Volatile private var foreground = false
     private val monitor =
@@ -82,12 +89,14 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     private fun suspendConnection(reason: String) {
+        appsTimeout?.cancel()
         retry?.cancel()
         timeout?.cancel()
         connection.disconnect()
         _state.update {
             it.copy(
                 connected = false,
+                power = PowerObservation(reason = "Phone connection suspended; TV power unknown"),
                 status = reason,
                 trustIp = null,
                 fingerprint = null,
@@ -230,6 +239,14 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
             return
         }
         val sent = connection.sendText(k.draft)
+        record(
+            "Keyboard text",
+            DispatchResult(
+                if (sent) DeliveryStatus.COMMAND_SENT else DeliveryStatus.FAILED,
+                Transport.WIFI,
+                "Text send ${if(sent) "queued; TV field requires observation" else "failed"}; draft content is excluded from diagnostics",
+            ),
+        )
         _state.update {
             it.copy(
                 keyboard =
@@ -249,6 +266,14 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
         if (!keyboardReady()) return
         val ended = connection.endText()
         val entered = ended && connection.send("KEY_ENTER")
+        record(
+            "Keyboard Enter",
+            DispatchResult(
+                if (entered) DeliveryStatus.COMMAND_SENT else DeliveryStatus.FAILED,
+                Transport.WIFI,
+                "SendInputEnd + Enter ${if(entered) "queued, execution unconfirmed" else "incomplete; partial delivery possible"}",
+            ),
+        )
         _state.update {
             it.copy(
                 keyboard =
@@ -266,6 +291,14 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     fun keyboardBackspace() {
         if (!keyboardReady()) return
         val sent = connection.send("KEY_BACKSPACE")
+        record(
+            "Keyboard Backspace",
+            DispatchResult(
+                if (sent) DeliveryStatus.COMMAND_SENT else DeliveryStatus.FAILED,
+                Transport.WIFI,
+                "Backspace ${if(sent) "queued, execution unconfirmed" else "not queued"}",
+            ),
+        )
         _state.update {
             it.copy(
                 keyboard =
@@ -310,6 +343,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
 
     fun mode(ir: Boolean) {
         if (ir) {
+            appsTimeout?.cancel()
             allowReconnect = false
             retry?.cancel()
             timeout?.cancel()
@@ -318,6 +352,10 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
         _state.update {
             it.copy(
                 ir = ir,
+                remoteMode = if (ir) false else it.remoteMode,
+                power =
+                    if (ir) PowerObservation(reason = "IR mode has no TV power telemetry")
+                    else it.power,
                 connected = if (ir) false else it.connected,
                 feedback = "",
                 keyboard = KeyboardState(automatic = it.keyboard.automatic),
@@ -396,6 +434,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     fun connect(tv: Tv) {
+        appsTimeout?.cancel()
         if (!Protocol.localIp(tv.ip)) {
             feedback("Only private LAN IPv4 TV addresses are supported.")
             return
@@ -408,6 +447,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
             it.copy(
                 ir = false,
                 selected = tv,
+                power = PowerObservation(),
                 remoteMode = tv.remote,
                 keyboard = KeyboardState(automatic = it.keyboard.automatic),
                 apps = emptyList(),
@@ -433,6 +473,9 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
                 delay(35000)
                 if (!connection.ready) {
                     connection.disconnect()
+                    _state.update {
+                        it.copy(power = it.power.exhausted(System.currentTimeMillis()))
+                    }
                     status(
                         "Authorization timed out. Check TV prompt or unsupported model. Reconnect to retry.",
                         false,
@@ -442,6 +485,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     fun disconnect() {
+        appsTimeout?.cancel()
         allowReconnect = false
         retry?.cancel()
         timeout?.cancel()
@@ -468,98 +512,288 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
         } else disconnect()
     }
 
-    fun send(key: String) {
-        val s = _state.value
-        if (s.ir) {
-            if (!s.hasIr) {
-                feedback("This phone reports no Consumer IR transmitter.")
-                return
+    private fun record(label: String, result: DispatchResult) {
+        _state.update {
+            it.copy(
+                feedback = result.detail,
+                diagnostics =
+                    (listOf(
+                            DiagnosticResult(
+                                sequence.incrementAndGet(),
+                                label,
+                                result.status,
+                                if (result.sent) DeliveryStatus.REQUIRES_MANUAL_VERIFICATION
+                                else result.status,
+                                result.transport,
+                                result.detail,
+                            )
+                        ) + it.diagnostics)
+                        .take(60),
+            )
+        }
+    }
+
+    fun markDiagnostic(id: Long, responded: Boolean) {
+        _state.update {
+            it.copy(
+                diagnostics =
+                    it.diagnostics.map { r ->
+                        if (r.sequence == id)
+                            r.copy(
+                                manual = responded,
+                                verification =
+                                    if (responded) DeliveryStatus.CONFIRMED_RESPONSE
+                                    else DeliveryStatus.FAILED,
+                                detail =
+                                    r.detail +
+                                        " • User reported physical response: $responded (not machine verified)",
+                            )
+                        else r
+                    }
+            )
+        }
+    }
+
+    fun requestTest(key: String) {
+        _state.update { it.copy(pendingTest = key) }
+    }
+
+    fun dismissTest() {
+        _state.update { it.copy(pendingTest = null) }
+    }
+
+    fun confirmTest() {
+        val key = _state.value.pendingTest ?: return
+        dismissTest()
+        when {
+            key.startsWith("app:") -> launch(TvApp("", key.removePrefix("app:")))
+            key == "keyboard" -> {
+                diagnosticChecks()
+                openKeyboard()
             }
-            viewModelScope.launch(Dispatchers.IO) {
-                irMutex.withLock {
-                    runCatching {
+            else -> send(key)
+        }
+    }
+
+    fun send(key: String) {
+        if (ControlCatalog.find(key)?.power == true) {
+            requestPower(
+                when (key) {
+                    "KEY_POWERON" -> PowerIntent.ON
+                    "KEY_POWEROFF" -> PowerIntent.OFF
+                    else -> PowerIntent.TOGGLE
+                }
+            )
+            return
+        }
+        dispatch(key, _state.value.ir)
+    }
+
+    private fun dispatch(key: String, ir: Boolean, offIntent: Boolean = false) {
+        val s = _state.value
+        viewModelScope.launch(if (ir) Dispatchers.IO else Dispatchers.Main.immediate) {
+            irMutex.withLock {
+                val current = _state.value
+                val allowed =
+                    foreground &&
+                        current.selected?.ip == s.selected?.ip &&
+                        (if (ir) !current.remoteMode else canCommand() && current.connected)
+                val result =
+                    if (ir && !allowed)
+                        DispatchResult(
+                            DeliveryStatus.FAILED,
+                            Transport.IR,
+                            "Open app in local mode before IR transmission",
+                        )
+                    else
+                        CommandDispatcher.send(
+                            key,
+                            ir,
+                            s.hasIr,
+                            allowed,
+                            s.nec,
+                            connection::send,
+                        ) { pattern ->
                             val ranges = irManager.carrierFrequencies
                             check(
                                 ranges == null ||
                                     ranges.any { 38000 in it.minFrequency..it.maxFrequency }
-                            ) {
-                                "38 kHz not supported by this transmitter"
-                            }
-                            irManager.transmit(38000, Protocol.irPattern(key, s.nec))
-                        }
-                        .onSuccess {
-                            feedback(
-                                "IR transmitted • point at TV. TV response cannot be confirmed."
                             )
+                            irManager.transmit(38000, pattern)
                         }
-                        .onFailure { feedback("IR failed: ${it.message}") }
-                }
+                record(ControlCatalog.find(key)?.label ?: key, result)
+                if (offIntent && result.sent)
+                    _state.update {
+                        it.copy(power = it.power.offRequested(System.currentTimeMillis()))
+                    }
             }
-        } else if (canCommand())
-            feedback(
-                if (connection.send(key)) "Command queued to TV • TV execution is not acknowledged."
-                else "Not connected. Connect to a compatible Samsung TV first."
-            )
+        }
     }
 
-    fun wake() {
-        val tv = _state.value.selected
-        if (tv == null || tv.mac.isBlank()) {
-            feedback("Configure the TV MAC address for Wake-on-LAN. Otherwise use IR power.")
+    fun requestPower(intent: PowerIntent) {
+        _state.update { it.copy(pendingPower = intent) }
+    }
+
+    fun dismissPower() {
+        _state.update { it.copy(pendingPower = null) }
+    }
+
+    fun powerPreview(intent: PowerIntent, physical: Boolean): PowerPlan {
+        val s = _state.value
+        val tv = s.selected
+        return PowerPlanner.plan(
+            intent,
+            PowerContext(
+                s.ir,
+                s.hasIr,
+                s.remoteMode,
+                s.connected,
+                tv?.let(store::powerMac) ?: "",
+                tv?.let { store.wakeEnabled(it.ip) } ?: false,
+                if (!physical) PhysicalState.UNKNOWN
+                else if (intent == PowerIntent.ON) PhysicalState.STANDBY else PhysicalState.ON,
+            ),
+        )
+    }
+
+    fun savedPowerMac() = _state.value.selected?.let(store::powerMac) ?: ""
+
+    fun savedWakeEnabled() = _state.value.selected?.let { store.wakeEnabled(it.ip) } ?: false
+
+    fun savePowerSettings(mac: String, enabled: Boolean) {
+        val tv = _state.value.selected ?: return feedback("Select a TV first")
+        if (enabled && !Protocol.validWakeMac(mac.trim()))
+            return feedback("Enter a valid unicast TV MAC address")
+        store.powerSettings(tv.ip, mac.trim(), enabled)
+        feedback("Wake configuration saved; TV standby support is not verified")
+    }
+
+    fun confirmPower(physical: Boolean) {
+        val intent = _state.value.pendingPower ?: return
+        val plan = powerPreview(intent, physical)
+        dismissPower()
+        if (plan.transport == Transport.NONE) {
+            record(
+                "Power $intent",
+                DispatchResult(DeliveryStatus.UNSUPPORTED, Transport.NONE, plan.reason),
+            )
             return
         }
-        if (!canCommand()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { Discovery.wake(tv.mac, if (tv.remote) tv.ip else null) }
-                .onSuccess {
-                    feedback(
-                        "Wake packet sent ${if(tv.remote) "to TV IP through VPN" else "on LAN"}. Standby/ARP support is required; power-on is unconfirmed."
+        if (!foreground || !powerGate.acquire(android.os.SystemClock.elapsedRealtime()))
+            return feedback("Wait five seconds between explicit power requests")
+        when (plan.transport) {
+            Transport.IR,
+            Transport.WIFI -> {
+                dispatch(plan.key!!, plan.transport == Transport.IR, intent == PowerIntent.OFF)
+            }
+            Transport.WAKE -> {
+                val tv = _state.value.selected ?: return
+                if (!canCommand()) return
+                viewModelScope.launch(Dispatchers.IO) {
+                    val r = runCatching {
+                        Discovery.wake(store.powerMac(tv), if (tv.remote) tv.ip else null)
+                    }
+                    record(
+                        "Power ON / wake",
+                        DispatchResult(
+                            if (r.isSuccess) DeliveryStatus.COMMAND_SENT else DeliveryStatus.FAILED,
+                            Transport.WAKE,
+                            if (r.isSuccess)
+                                plan.reason +
+                                    " Packet sent; wake is unconfirmed. Use Connect to probe the endpoint."
+                            else "Wake packet failed",
+                        ),
                     )
                 }
-                .onFailure { feedback("Wake failed: ${it.message}") }
+            }
+            else -> Unit
         }
     }
 
+    fun wake() = requestPower(PowerIntent.ON)
+
     fun launch(app: TvApp) {
-        if (_state.value.ir) {
-            feedback("IR cannot launch apps directly. Use Home and navigation.")
-            return
-        }
-        if (!canCommand()) return
-        val installed = _state.value.apps.find { it.id == app.id || it.name.equals(app.name, true) }
-        if (installed == null) {
-            feedback(
-                "${app.name}: no verified installed app ID. Refresh TV apps, add its ID, or use Home and navigation."
+        val s = _state.value
+        if (s.ir) {
+            record(
+                app.name,
+                DispatchResult(
+                    DeliveryStatus.UNSUPPORTED,
+                    Transport.IR,
+                    "IR cannot directly launch apps; use Home and navigation",
+                ),
             )
             return
         }
-        feedback(
-            if (connection.launch(installed.id))
-                "Launch request sent for ${installed.name}. TV does not confirm execution; use Home if unavailable."
-            else "TV disconnected; app was not requested."
+        if (!canCommand()) return
+        val resolved = AppLauncher.resolve(app, s.apps, s.shortcuts)
+        val target = resolved.app
+        val queued = target != null && connection.launch(target.id, target.launchType)
+        record(
+            app.name,
+            DispatchResult(
+                if (target == null) DeliveryStatus.UNSUPPORTED
+                else if (queued) DeliveryStatus.COMMAND_SENT else DeliveryStatus.FAILED,
+                Transport.WIFI,
+                resolved.detail +
+                    if (queued) " • Launch queued, execution unconfirmed; use Home if unavailable"
+                    else " • Use Home and navigation",
+            ),
         )
     }
 
-    fun launchCustom(app: TvApp) {
-        if (_state.value.ir) {
-            feedback("Direct app launching is unavailable over IR.")
-            return
-        }
-        if (!canCommand()) return
-        feedback(
-            if (connection.launch(app.id))
-                "Requested ${app.name} using your app ID; launch is unconfirmed."
-            else "Not connected"
-        )
-    }
+    fun launchCustom(app: TvApp) = launch(app)
 
     fun refreshApps() {
         if (!canCommand()) return
-        feedback(
-            if (connection.requestApps())
-                "Requested app list. Some TVs do not expose it; use Home if no apps appear."
-            else "Connect to a TV first."
+        appsTimeout?.cancel()
+        if (!connection.requestApps()) {
+            feedback("Connect to a TV first")
+            return
+        }
+        feedback("Requested installed apps; awaiting actual response")
+        appsTimeout =
+            viewModelScope.launch {
+                delay(8000)
+                record(
+                    "Installed apps",
+                    DispatchResult(
+                        DeliveryStatus.FAILED,
+                        Transport.WIFI,
+                        "No app list response within 8 seconds; API may be unsupported. Use Home.",
+                    ),
+                )
+            }
+    }
+
+    fun diagnosticChecks() {
+        val s = _state.value
+        record(
+            "IR hardware",
+            DispatchResult(
+                if (s.hasIr) DeliveryStatus.CONFIRMED_RESPONSE else DeliveryStatus.UNSUPPORTED,
+                Transport.IR,
+                "Android emitter query: ${s.hasIr}; this does not verify TV reception",
+            ),
         )
+        record(
+            "Pairing / connection",
+            DispatchResult(
+                if (s.connected) DeliveryStatus.CONFIRMED_RESPONSE else DeliveryStatus.FAILED,
+                Transport.WIFI,
+                "Authorized channel: ${s.connected}; ${s.network.summary}; panel state unmeasured",
+            ),
+        )
+        if (s.connected) refreshApps()
+    }
+
+    fun saveShortcut(app: TvApp) {
+        if (!AppLauncher.validId(app.id) || app.name.isBlank())
+            return feedback("Invalid shortcut name or ID")
+        val list = _state.value.shortcuts.filterNot { it.id == app.id } + app
+        store.shortcuts(list)
+        _state.update { it.copy(shortcuts = list) }
+        feedback("Saved custom ID and launch type; physical launch remains unverified")
     }
 
     fun toggleShortcut(app: TvApp) {
@@ -587,6 +821,8 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
             it.copy(
                 status = text,
                 connected = connected,
+                power =
+                    if (connected) it.power else it.power.disconnected(System.currentTimeMillis()),
                 keyboard =
                     if (connected) {
                         if (text.startsWith("TV reported ms.error"))
@@ -597,13 +833,34 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
         }
     }
 
+    override fun commandError() {
+        record(
+            "TV API error",
+            DispatchResult(
+                DeliveryStatus.FAILED,
+                Transport.WIFI,
+                "TV returned ms.error; request correlation is unavailable. Recent commands are not confirmed.",
+            ),
+        )
+    }
+
     override fun authorized(tv: Tv) {
+        _state.update { it.copy(power = it.power.authorized()) }
         attempts = 0
         timeout?.cancel()
         _state.update { it.copy(saved = store.saved()) }
     }
 
     override fun apps(apps: List<TvApp>) {
+        appsTimeout?.cancel()
+        record(
+            "Installed apps response",
+            DispatchResult(
+                DeliveryStatus.CONFIRMED_RESPONSE,
+                Transport.WIFI,
+                "TV returned ${apps.size} app entries; this does not confirm any app launch",
+            ),
+        )
         _state.update {
             it.copy(
                 apps = apps,
@@ -621,6 +878,15 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     override fun disconnected(retry: Boolean) {
+        appsTimeout?.cancel()
+        _state.update {
+            it.copy(
+                power =
+                    if (attempts >= ReconnectPolicy.MAX_ATTEMPTS)
+                        it.power.exhausted(System.currentTimeMillis())
+                    else it.power.disconnected(System.currentTimeMillis())
+            )
+        }
         timeout?.cancel()
         if (!retry) {
             connection.disconnect()

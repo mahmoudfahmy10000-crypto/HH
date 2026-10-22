@@ -7,7 +7,7 @@ A native Kotlin / Jetpack Compose Android remote. AMOLED surfaces, blue accents,
 ## Download and install using only your Android phone
 
 1. Open **https://github.com/mahmoudfahmy10000-crypto/HH/actions** in Chrome and sign in to GitHub. Use **Desktop site** if artifacts are hidden in the mobile layout.
-2. Select **Build Android APK**, then the latest successful green run on `main`. If none exists, use **Run workflow → main → Run workflow**.
+2. Select **Build Android APK**, then the latest successful green run on `feature/au7000-button-power-audit` for version 1.2.0. For a fresh build, use **Run workflow → feature/au7000-button-power-audit → Run workflow**.
 3. Under **Artifacts**, tap **SamsungUniversalRemote-APK**. Download the ZIP and extract it in Files. The installable file inside is **app-debug.apk**.
 4. Tap the APK. If Android asks, allow **Install unknown apps** for the browser or Files app you used, then tap **Install**. You can turn that permission back off afterward.
 5. Open **Samsung Universal Remote**. No Android Studio, PC, subscription, Samsung account, or app login is needed.
@@ -28,13 +28,16 @@ Supported TVs expose Samsung's Tizen WebSocket remote API, typically 2016 onward
 
 **Settings** queries `ConsumerIrManager.hasIrEmitter()`. Hardware varies across Redmi Note 14 regional variants. If no emitter is exposed by Android, IR is explicitly unavailable; it is never simulated.
 
-Select Samsung32 first (38 kHz, 4.5 ms header, `E0 E0 command complement`, MSB first). An alternate NEC 9 ms header profile is available for compatible legacy receivers. **Test IR** sends volume-up, not a destructive action. Point the phone's emitter at the TV. IR works without Wi-Fi/internet. The Android transmit call confirms submission to the emitter, not that the TV responded. IR Power is a toggle; Settings uses the Samsung menu code.
+Select Samsung32 first (38 kHz, 4.5 ms header, `E0 E0 command complement`, MSB first). An alternate NEC 9 ms header profile is available for compatible legacy receivers. **Test IR** asks for confirmation before sending one volume-up key. Point the phone's emitter at the TV. IR works without Wi-Fi/internet. The Android transmit call confirms submission to the emitter, not that the TV responded. IR Power is a toggle; Settings uses the Samsung menu code.
 
 ## Controls and limitations
 
+Version 1.2.0 adds separate power intents, central app launch with native/deep-link metadata, Exit/colors, and Settings → Remote Diagnostics / Power Diagnostics. See [the complete button audit, fixes and physical test procedure](BUTTON_AUDIT.md). No physical AU7000 results are claimed.
+
+
 Power toggle, Wake-on-LAN, volume/channel, mute, Home, Back, menu/settings, source, D-pad/OK, digits, play/pause, fast-forward/rewind are implemented. Model support for individual keys varies. A WebSocket `send` only confirms that a message was queued; the TV protocol does not acknowledge execution of individual keys. UI feedback states this explicitly.
 
-- **Wake:** set the TV MAC in manual setup (or use its discovered MAC). TV network standby / Power On With Mobile must be enabled. Broadcast Wake-on-LAN cannot guarantee power-on; use IR when unsupported.
+- **Power ON:** configure and opt into network wake in **Settings → Power Diagnostics**, using the active TV-interface MAC after enabling supported TV network standby / Power On With Mobile. Alternatively confirm physical standby for a single local IR toggle. Wake requests never claim the TV actually turned on. **Power OFF** uses an authorized discrete Wi-Fi key or physically confirmed-on IR; no automatic toggle fallback.
 - **Swipe pad:** translates swipes to actual direction-key requests. Native mouse-pointer control is not claimed because it is not consistently supported by this API.
 - **Apps:** requests `ed.installedApp.get`, launches available app IDs with `ed.apps.launch`. YouTube, Yango Play, WATCH IT, Shahid, MBC, Netflix and Prime Video are matched against the TV's actual app list, with no invented regional IDs. When an app is missing or the API is unavailable, feedback recommends **Home and navigation**. Use **Apps** to pin installed apps or supply a known Samsung app ID manually. A launch request never claims that playback or launch succeeded. IR has no direct app launching.
 

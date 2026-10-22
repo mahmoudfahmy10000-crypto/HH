@@ -196,6 +196,7 @@ private fun RemoteApp(vm: RemoteModel = viewModel()) {
             Spacer(Modifier.height(12.dp))
         }
     }
+    AuditDialogs(s, vm)
     if (s.keyboard.visible) KeyboardDialog(s.keyboard, vm)
     if (s.trustIp != null)
         AlertDialog(
@@ -249,10 +250,11 @@ private fun RemoteControls(s: RemoteState, vm: RemoteModel) {
     var dx by remember { mutableFloatStateOf(0f) }
     var dy by remember { mutableFloatStateOf(0f) }
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        KeyButton("Power", Icons.Rounded.PowerSettingsNew, Modifier.weight(1f), true) {
-            vm.send("KEY_POWER")
+        Button(onClick = { vm.requestPower(PowerIntent.ON) }) { Text("ON") }
+        Button(onClick = { vm.requestPower(PowerIntent.OFF) }) { Text("OFF") }
+        KeyButton("Toggle", Icons.Rounded.PowerSettingsNew, Modifier.weight(1f), true) {
+            vm.requestPower(PowerIntent.TOGGLE)
         }
-        if (!s.ir) KeyButton("Wake", Icons.Rounded.Power, Modifier.weight(1f)) { vm.wake() }
         KeyButton("Source", Icons.Rounded.Input, Modifier.weight(1f)) { vm.send("KEY_SOURCE") }
         KeyButton("Mute", Icons.Rounded.VolumeOff, Modifier.weight(1f)) { vm.send("KEY_MUTE") }
     }
@@ -397,6 +399,16 @@ private fun RemoteControls(s: RemoteState, vm: RemoteModel) {
     ) {
         vm.openKeyboard()
     }
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        listOf("KEY_EXIT", "KEY_GUIDE", "KEY_INFO").forEach { key ->
+            TextButton(onClick = { vm.send(key) }) { Text(key.removePrefix("KEY_")) }
+        }
+    }
+    Row {
+        listOf("RED", "GREEN", "YELLOW", "BLUE").forEach { color ->
+            TextButton(onClick = { vm.send("KEY_$color") }) { Text(color.take(1)) }
+        }
+    }
     Text("STREAMING", style = MaterialTheme.typography.labelMedium, color = Blue)
     AppGrid(s, vm)
 }
@@ -406,10 +418,7 @@ private val brands =
 
 @Composable
 private fun AppGrid(s: RemoteState, vm: RemoteModel) {
-    val apps =
-        (brands.map { name -> s.apps.find { it.name.contains(name, true) } ?: TvApp("", name) } +
-                s.shortcuts)
-            .distinctBy { it.name }
+    val apps = (brands.map { TvApp("", it) } + s.shortcuts).distinctBy { it.id to it.name }
     apps.chunked(2).forEach { row ->
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             row.forEach { app ->
@@ -423,11 +432,7 @@ private fun AppGrid(s: RemoteState, vm: RemoteModel) {
                         Color(0xFF52AEFF),
                     )
                 OutlinedButton(
-                    onClick = {
-                        if (app.id.isNotBlank() && s.shortcuts.any { it.id == app.id })
-                            vm.launchCustom(app)
-                        else vm.launch(app)
-                    },
+                    onClick = { vm.launch(app) },
                     modifier = Modifier.weight(1f).height(62.dp),
                     shape = RoundedCornerShape(18.dp),
                 ) {
@@ -447,6 +452,7 @@ private fun AppGrid(s: RemoteState, vm: RemoteModel) {
 private fun AppsScreen(s: RemoteState, vm: RemoteModel) {
     var name by remember { mutableStateOf("") }
     var id by remember { mutableStateOf("") }
+    var native by remember { mutableStateOf(false) }
     Text(
         "Your TV, your entertainment",
         style = MaterialTheme.typography.titleLarge,
@@ -464,7 +470,9 @@ private fun AppsScreen(s: RemoteState, vm: RemoteModel) {
     s.apps.forEach { app ->
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { vm.launch(app) }, modifier = Modifier.weight(1f)) {
-                Text(app.name)
+                Text(
+                    "${app.name} • ${app.id} • ${app.launchType}${if(app.typeKnown) "" else " (type unknown)"}"
+                )
             }
             TextButton(onClick = { vm.toggleShortcut(app) }) {
                 Text(if (s.shortcuts.any { it.id == app.id }) "Unpin" else "Pin")
@@ -486,10 +494,23 @@ private fun AppsScreen(s: RemoteState, vm: RemoteModel) {
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
     )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(native, { native = it })
+        Text(if (native) "NATIVE_LAUNCH override" else "DEEP_LINK override")
+    }
+    Button(onClick = { vm.send("KEY_HOME") }) { Text("Open Home • manual fallback") }
     Button(
-        enabled = name.isNotBlank() && id.isNotBlank(),
+        enabled = name.isNotBlank() && AppLauncher.validId(id.trim()),
         onClick = {
-            vm.toggleShortcut(TvApp(id.trim(), name.trim()))
+            vm.saveShortcut(
+                TvApp(
+                    id.trim(),
+                    name.trim(),
+                    if (native) LaunchType.NATIVE_LAUNCH else LaunchType.DEEP_LINK,
+                    true,
+                    true,
+                )
+            )
             name = ""
             id = ""
         },
@@ -590,6 +611,18 @@ private fun TvRow(tv: Tv, connect: () -> Unit, forget: (() -> Unit)? = null) {
 
 @Composable
 private fun SettingsScreen(s: RemoteState, vm: RemoteModel) {
+    var diagnostics by remember { mutableStateOf(false) }
+    var powerDiagnostics by remember { mutableStateOf(false) }
+    Button(onClick = { diagnostics = !diagnostics }) { Text("Remote Diagnostics") }
+    Button(onClick = { powerDiagnostics = !powerDiagnostics }) { Text("Power Diagnostics") }
+    if (powerDiagnostics) {
+        PowerDiagnostics(s, vm)
+        return
+    }
+    if (diagnostics) {
+        RemoteDiagnostics(s, vm)
+        return
+    }
     Text("Keyboard preferences", style = MaterialTheme.typography.titleLarge, color = Color.White)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(s.keyboard.automatic, vm::automaticKeyboard)
@@ -636,7 +669,7 @@ private fun SettingsScreen(s: RemoteState, vm: RemoteModel) {
     Button(
         onClick = {
             vm.mode(true)
-            vm.send("KEY_VOLUP")
+            vm.requestTest("KEY_VOLUP")
         },
         enabled = s.hasIr,
     ) {

@@ -6,6 +6,11 @@ object Protocol {
     val irCodes =
         mapOf(
             "KEY_POWER" to 0x40,
+            "KEY_EXIT" to 0xB4,
+            "KEY_RED" to 0x36,
+            "KEY_GREEN" to 0x28,
+            "KEY_YELLOW" to 0xA8,
+            "KEY_BLUE" to 0x68,
             "KEY_VOLUP" to 0xE0,
             "KEY_VOLDOWN" to 0xD0,
             "KEY_CHUP" to 0x48,
@@ -54,12 +59,7 @@ object Protocol {
     }
 
     fun key(key: String): String {
-        require(
-            key in irCodes ||
-                key == "KEY_POWERON" ||
-                key == "KEY_POWEROFF" ||
-                key == "KEY_BACKSPACE"
-        )
+        require(ControlCatalog.find(key) != null) { "Unsupported remote key" }
         return JSONObject()
             .put("method", "ms.remote.control")
             .put(
@@ -73,7 +73,7 @@ object Protocol {
             .toString()
     }
 
-    fun launch(id: String) =
+    fun launch(id: String, type: LaunchType = LaunchType.DEEP_LINK) =
         JSONObject()
             .put("method", "ms.channel.emit")
             .put(
@@ -85,7 +85,7 @@ object Protocol {
                         "data",
                         JSONObject()
                             .put("appId", id)
-                            .put("action_type", "DEEP_LINK")
+                            .put("action_type", type.name)
                             .put("metaTag", ""),
                     ),
             )
@@ -120,6 +120,12 @@ object Protocol {
             (p[0] == 172 && p[1] in 16..31) ||
             (p[0] == 192 && p[1] == 168) ||
             (p[0] == 169 && p[1] == 254)
+    }
+
+    fun validWakeMac(mac: String): Boolean {
+        if (!mac.matches(Regex("(?i)[0-9a-f]{2}([:-][0-9a-f]{2}){5}"))) return false
+        val bytes = mac.split(':', '-').map { it.toInt(16) }
+        return bytes.any { it != 0 } && bytes[0] and 1 == 0
     }
 
     fun magicPacket(mac: String): ByteArray {

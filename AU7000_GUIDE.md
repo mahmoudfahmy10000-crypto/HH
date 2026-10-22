@@ -1,5 +1,7 @@
 # AU7000 remote access and smart keyboard — version 1.1.0
 
+> For version 1.2.0, [BUTTON_AUDIT.md](BUTTON_AUDIT.md) supersedes power, app-launch, diagnostics and test details. Older results below are retained as historical evidence.
+
 Target: Samsung AU7000 (2021 Tizen), Redmi Note 14. Package remains `com.bluewave.remote`.
 This is a native Android debug APK. No screen mirroring, live-TV streaming, video capture,
 new microphone permission, cloud account collection, or public TV-port exposure was added.

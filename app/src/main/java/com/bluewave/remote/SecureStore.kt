@@ -20,7 +20,13 @@ data class Tv(
     val remote: Boolean = false,
 )
 
-data class TvApp(val id: String, val name: String)
+data class TvApp(
+    val id: String,
+    val name: String,
+    val launchType: LaunchType = LaunchType.DEEP_LINK,
+    val typeKnown: Boolean = false,
+    val overrideType: Boolean = false,
+)
 
 interface PairingStore {
     fun token(ip: String): String?
@@ -138,6 +144,8 @@ class SecureStore(context: Context) : PairingStore {
             .remove("token:tls:$ip")
             .remove("token:plain:$ip")
             .remove("pin:$ip")
+            .remove("power-mac:$ip")
+            .remove("wake-enabled:$ip")
             .apply()
         if (prefs.getString("last", null) == ip) prefs.edit().remove("last").apply()
     }
@@ -146,6 +154,14 @@ class SecureStore(context: Context) : PairingStore {
 
     fun automaticKeyboard(enabled: Boolean) {
         prefs.edit().putBoolean("automatic-keyboard", enabled).apply()
+    }
+
+    fun powerMac(tv: Tv): String = prefs.getString("power-mac:${tv.ip}", null) ?: tv.mac
+
+    fun wakeEnabled(ip: String) = prefs.getBoolean("wake-enabled:$ip", false)
+
+    fun powerSettings(ip: String, mac: String, enabled: Boolean) {
+        prefs.edit().putString("power-mac:$ip", mac).putBoolean("wake-enabled:$ip", enabled).apply()
     }
 
     fun last(): Tv? = saved().find { it.ip == prefs.getString("last", null) }
@@ -157,6 +173,12 @@ class SecureStore(context: Context) : PairingStore {
                     TvApp(
                         a.getJSONObject(it).getString("id"),
                         a.getJSONObject(it).getString("name"),
+                        runCatching {
+                                LaunchType.valueOf(a.getJSONObject(it).optString("launchType"))
+                            }
+                            .getOrDefault(LaunchType.DEEP_LINK),
+                        a.getJSONObject(it).optBoolean("typeKnown"),
+                        a.getJSONObject(it).optBoolean("overrideType"),
                     )
                 }
             }
@@ -169,7 +191,16 @@ class SecureStore(context: Context) : PairingStore {
                 "shortcuts",
                 JSONArray()
                     .apply {
-                        apps.forEach { put(JSONObject().put("id", it.id).put("name", it.name)) }
+                        apps.forEach {
+                            put(
+                                JSONObject()
+                                    .put("id", it.id)
+                                    .put("name", it.name)
+                                    .put("launchType", it.launchType.name)
+                                    .put("typeKnown", it.typeKnown)
+                                    .put("overrideType", it.overrideType)
+                            )
+                        }
                     }
                     .toString(),
             )

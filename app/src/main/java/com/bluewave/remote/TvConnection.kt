@@ -25,6 +25,8 @@ internal constructor(
 
         fun ime(event: TvImeEvent) {}
 
+        fun commandError() {}
+
         fun disconnected(retry: Boolean)
     }
 
@@ -158,16 +160,18 @@ internal constructor(
                                                     data.optJSONObject(i)?.let { a ->
                                                         val id = a.optString("appId")
                                                         if (id.isBlank()) null
-                                                        else TvApp(id, a.optString("name", id))
+                                                        else AppLauncher.parseApp(a)
                                                     }
                                                 }
                                         listener.apps(apps)
                                     }
-                                    "ms.error" ->
+                                    "ms.error" -> {
+                                        listener.commandError()
                                         listener.status(
                                             "TV reported ms.error; command or text may be unsupported. Check the TV field and model.",
                                             ready,
                                         )
+                                    }
                                 }
                             }
                             .onFailure {
@@ -217,7 +221,8 @@ internal constructor(
 
     fun send(key: String): Boolean = ready && socket?.send(Protocol.key(key)) == true
 
-    fun launch(id: String): Boolean = ready && socket?.send(Protocol.launch(id)) == true
+    fun launch(id: String, type: LaunchType = LaunchType.DEEP_LINK): Boolean =
+        ready && socket?.send(Protocol.launch(id, type)) == true
 
     fun requestApps(): Boolean = ready && socket?.send(Protocol.appList()) == true
 

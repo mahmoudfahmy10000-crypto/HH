@@ -95,7 +95,7 @@ if apk != out / 'app-debug.apk':
 (out / 'alignment.txt').write_text(alignment)
 (out / 'manifest-badging.txt').write_text(badging)
 (out / 'SHA256SUMS').write_text(sha+'  app-debug.apk\n')
-for report in [Path('SECURITY_AUDIT.md'), Path('AU7000_GUIDE.md')]:
+for report in [Path('SECURITY_AUDIT.md'), Path('AU7000_GUIDE.md'), Path('BUTTON_AUDIT.md')]:
     if report.exists():
         shutil.copy2(report, out / report.name)
 for evidence in Path('audit').glob('*.json'):
