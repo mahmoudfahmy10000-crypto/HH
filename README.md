@@ -14,9 +14,9 @@ Artifacts expire after 30 days; rerun the workflow for a new download. The APK i
 
 ## Connect over Wi-Fi
 
-- Turn the TV on, connect phone and TV to the same LAN, then open **Devices → Discover TVs**. SSDP discovery verifies candidates with Samsung's port 8001 device API. If discovery is blocked, enter the TV's IPv4 address from its network settings.
+- Turn the TV on, connect phone and TV to the same LAN, then open **Devices → Discover TVs**. Only RFC1918 private and IPv4 link-local TV addresses are accepted. SSDP discovery verifies candidates with Samsung's port 8001 device API. If discovery is blocked, enter the TV's IPv4 address from its network settings.
 - Default: TLS WebSocket on port **8002**, `/api/v2/channels/samsung.remote.control`. Samsung TVs frequently have self-signed certificates. Check the TV IP on a trusted network, explicitly approve the displayed SHA-256 certificate, then choose **Allow** on the TV. Certificate changes require fresh approval. This is certificate pinning after first-use consent, not public-CA validation.
-- Legacy port **8001** is an explicit unencrypted option for compatible models. Pairing tokens and commands are exposed to the LAN in that mode; use only on a trusted network. No automatic TLS downgrade.
+- Legacy port **8001** is an explicit unencrypted option for compatible models. Pairing tokens and commands are exposed to the LAN in that mode; use only on a trusted network. No automatic TLS downgrade. TLS and legacy credentials now use separate storage namespaces; upgrading from 1.0.0 requires approving TV pairing again.
 - Only the TV's `ms.channel.connect` event marks the connection authorized and saves it. Tokens are encrypted using AES-GCM and an Android Keystore key. Backups are disabled. **Forget** removes saved credentials and the certificate pin.
 - Last authorized TV reconnects on app startup; transient failures retry three times with backoff. Pairing has a 35-second timeout. Denied pairing requires TV permission changes and manual retry. Foreground use is intended; there is no persistent background service.
 
@@ -34,7 +34,7 @@ Power toggle, Wake-on-LAN, volume/channel, mute, Home, Back, menu/settings, sour
 
 - **Wake:** set the TV MAC in manual setup (or use its discovered MAC). TV network standby / Power On With Mobile must be enabled. Broadcast Wake-on-LAN cannot guarantee power-on; use IR when unsupported.
 - **Swipe pad:** translates swipes to actual direction-key requests. Native mouse-pointer control is not claimed because it is not consistently supported by this API.
-- **Apps:** requests `ed.installedApp.get`, launches available app IDs with `ed.apps.launch`. YouTube, Yango Play, WATCH IT, Shahid, Netflix and Prime Video are matched against the TV's actual app list, with no invented regional IDs. When an app is missing or the API is unavailable, feedback recommends **Home and navigation**. Use **Apps** to pin installed apps or supply a known Samsung app ID manually. A launch request never claims that playback or launch succeeded. IR has no direct app launching.
+- **Apps:** requests `ed.installedApp.get`, launches available app IDs with `ed.apps.launch`. YouTube, Yango Play, WATCH IT, Shahid, MBC, Netflix and Prime Video are matched against the TV's actual app list, with no invented regional IDs. When an app is missing or the API is unavailable, feedback recommends **Home and navigation**. Use **Apps** to pin installed apps or supply a known Samsung app ID manually. A launch request never claims that playback or launch succeeded. IR has no direct app launching.
 
 ## Build and checks
 
@@ -47,10 +47,16 @@ Java **17 JDK**, Android SDK platform **35**, Gradle **8.10.2** (wrapper with di
 
 APK: `app/build/outputs/apk/debug/app-debug.apk`.
 
-GitHub Actions installs Java and the SDK, builds with the wrapper, runs unit tests/lint, and uploads the APK as **SamsungUniversalRemote-APK**. It runs on main pushes and manual dispatch. Unit tests validate IR wire encoding, complementary bits and durations, IPv4 inputs, Wake-on-LAN packets, Samsung JSON payloads, and local WebSocket authorization / denial / app enumeration / key transmission. These tests are protocol checks, not physical TV certification.
+GitHub Actions installs Java and the SDK, builds with the wrapper, runs unit tests/lint, verifies the APK signature/permissions/16 KB alignment/integrity, and uploads the APK plus its verification evidence as **SamsungUniversalRemote-APK**. It runs on main pushes and manual dispatch. Unit tests validate IR wire encoding, complementary bits and durations, IPv4 inputs, Wake-on-LAN packets, Samsung JSON payloads, and local WebSocket authorization / denial / app enumeration / key transmission. These tests are protocol checks, not physical TV certification.
 
 ## Privacy and permissions
 
-No ads, analytics, account, cloud backend, or telemetry. Network traffic goes directly to the IP you select or local SSDP/Wake-on-LAN broadcasts. Permissions: internet/local networking, network/Wi-Fi state, Wi-Fi multicast, Consumer IR transmission and haptic feedback. No location, contacts, microphone, camera, storage, or notification permission. Local cleartext access is necessary for SSDP device-info HTTP and optional legacy WebSocket; secure remote mode remains the default. Use trusted LANs only.
+No ads, analytics, account, cloud backend, or telemetry. Network traffic goes directly to the private LAN IP you select or local SSDP/Wake-on-LAN broadcasts. Permissions: internet/local networking, Wi-Fi multicast and Consumer IR transmission. Android View haptics do not require VIBRATE. No location, contacts, microphone, camera, storage, or notification permission. Local cleartext access is necessary for SSDP device-info HTTP and optional legacy WebSocket; secure remote mode remains the default. Use trusted LANs only.
 
 Independent project; not affiliated with Samsung or any streaming provider. Brand names identify supported shortcuts only. No official provider logos or copyrighted brand assets are bundled.
+
+## Security audit and verification
+
+See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for the 1.0.1 audit, limitations, retained local-TV protocol risks and dependency advisory evidence. The artifact includes `SHA256SUMS`, `verification.json`, `signature.txt`, alignment evidence and the report, all generated for the APK inside that same archive. Run `ANDROID_HOME=/path/to/sdk python3 tools/verify_apk.py` after `./gradlew assembleDebug testDebugUnitTest lintDebug` to reproduce the binary checks.
+
+A debug certificate is self-signed and does not establish a verified publisher or Play Protect reputation. If Play Protect blocks the APK, stop installation; do not disable or override Play Protect. A successful build, signature verification or clean advisory lookup is not Google approval. Android 16 behavior still needs testing on real hardware.

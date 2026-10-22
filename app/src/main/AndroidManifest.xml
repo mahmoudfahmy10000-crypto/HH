@@ -1,12 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <uses-permission android:name="android.permission.TRANSMIT_IR"/>
-    <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-feature android:name="android.hardware.consumerir" android:required="false"/>
-    <application android:theme="@style/AppTheme" android:label="Samsung Universal Remote" android:icon="@drawable/ic_remote" android:allowBackup="false" android:usesCleartextTraffic="true" android:supportsRtl="true">
+    <application android:theme="@style/AppTheme" android:label="Samsung Universal Remote" android:icon="@drawable/ic_remote" android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules" android:usesCleartextTraffic="true" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>

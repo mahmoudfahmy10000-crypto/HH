@@ -105,8 +105,8 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     fun manual(ip: String, mac: String, secure: Boolean) {
-        if (!Protocol.validIp(ip)) {
-            feedback("Enter a valid local IPv4 address.")
+        if (!Protocol.localIp(ip)) {
+            feedback("Enter a private LAN IPv4 address (for example 192.168.1.20).")
             return
         }
         if (mac.isNotBlank() && runCatching { Protocol.magicPacket(mac) }.isFailure) {
@@ -122,6 +122,10 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     fun connect(tv: Tv) {
+        if (!Protocol.localIp(tv.ip)) {
+            feedback("Only private LAN IPv4 TV addresses are supported.")
+            return
+        }
         retry?.cancel()
         timeout?.cancel()
         attempts = 0

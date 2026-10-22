@@ -357,7 +357,8 @@ private fun RemoteControls(s: RemoteState, vm: RemoteModel) {
     AppGrid(s, vm)
 }
 
-private val brands = listOf("YouTube", "Yango Play", "WATCH IT", "Shahid", "Netflix", "Prime Video")
+private val brands =
+    listOf("YouTube", "Yango Play", "WATCH IT", "Shahid", "MBC", "Netflix", "Prime Video")
 
 @Composable
 private fun AppGrid(s: RemoteState, vm: RemoteModel) {
@@ -575,7 +576,7 @@ private fun SettingsScreen(s: RemoteState, vm: RemoteModel) {
         color = Color.Gray,
     )
     Text(
-        "Version 1.0 • independent app, not affiliated with Samsung",
+        "Version ${BuildConfig.VERSION_NAME} • independent app, not affiliated with Samsung",
         style = MaterialTheme.typography.bodySmall,
         color = Blue,
     )

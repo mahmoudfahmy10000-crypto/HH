@@ -1,15 +1,19 @@
 package com.bluewave.remote
 
 import java.net.Proxy
-import java.security.MessageDigest
-import java.security.cert.X509Certificate
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
 import okhttp3.*
 import org.json.JSONObject
 
-class TvConnection(private val store: PairingStore, private val listener: Listener) {
+class TvConnection
+internal constructor(
+    private val store: PairingStore,
+    private val listener: Listener,
+    // Tests supply a loopback-only predicate; production uses the private-LAN policy.
+    private val destinationAllowed: (String) -> Boolean = Protocol::localIp,
+) {
     interface Listener {
         fun status(text: String, connected: Boolean)
 
@@ -40,44 +44,25 @@ class TvConnection(private val store: PairingStore, private val listener: Listen
 
     fun connect(tv: Tv) {
         disconnect()
+        require(destinationAllowed(tv.ip)) { "Only private LAN TV addresses are supported" }
         val current = generation
         listener.status("Connecting to ${tv.ip}…", false)
         val builder =
             OkHttpClient.Builder()
                 .proxy(Proxy.NO_PROXY)
+                .followRedirects(false)
+                .followSslRedirects(false)
                 .connectTimeout(7, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.SECONDS)
                 .pingInterval(15, TimeUnit.SECONDS)
         if (tv.secure) {
             val trust =
-                object : X509TrustManager {
-                    override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-
-                    override fun checkClientTrusted(
-                        chain: Array<out X509Certificate>,
-                        authType: String,
-                    ) {
-                        throw java.security.cert.CertificateException("Not a client")
-                    }
-
-                    override fun checkServerTrusted(
-                        chain: Array<out X509Certificate>,
-                        authType: String,
-                    ) {
-                        if (chain.isEmpty())
-                            throw java.security.cert.CertificateException("Missing TV certificate")
-                        val fp =
-                            MessageDigest.getInstance("SHA-256")
-                                .digest(chain[0].encoded)
-                                .joinToString(":") { "%02X".format(it) }
-                        if (store.pin(tv.ip) != fp) {
-                            if (current == generation) listener.trustRequired(tv.ip, fp)
-                            throw java.security.cert.CertificateException(
-                                "TV certificate requires approval"
-                            )
-                        }
-                    }
-                }
+                TvTrustManager(
+                    expectedFingerprint = { store.pin(tv.ip) },
+                    untrustedCertificate = { fp ->
+                        if (current == generation) listener.trustRequired(tv.ip, fp)
+                    },
+                )
             val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
             // Samsung certificates are usually self-signed and lack IP SANs. Exact user-approved
             // certificate pin is checked above.
@@ -86,6 +71,8 @@ class TvConnection(private val store: PairingStore, private val listener: Listen
             }
         }
         client = builder.build()
+        // Never reuse a TLS pairing credential on the optional plaintext endpoint.
+        val tokenScope = "${if (tv.secure) "tls" else "plain"}:${tv.ip}"
         val name = Base64.getEncoder().encodeToString("Bluewave Remote".toByteArray())
         val url =
             HttpUrl.Builder()
@@ -94,7 +81,7 @@ class TvConnection(private val store: PairingStore, private val listener: Listen
                 .port(if (tv.secure) 8002 else 8001)
                 .addPathSegments("api/v2/channels/samsung.remote.control")
                 .addQueryParameter("name", name)
-                .apply { store.token(tv.ip)?.let { addQueryParameter("token", it) } }
+                .apply { store.token(tokenScope)?.let { addQueryParameter("token", it) } }
                 .build()
         socket =
             client!!.newWebSocket(
@@ -110,6 +97,16 @@ class TvConnection(private val store: PairingStore, private val listener: Listen
 
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         if (current != generation) return
+                        if (text.length > 262144) {
+                            webSocket.cancel()
+                            ready = false
+                            listener.status(
+                                "TV response exceeded the size limit; disconnected.",
+                                false,
+                            )
+                            listener.disconnected(false)
+                            return
+                        }
                         runCatching {
                                 val msg = JSONObject(text)
                                 when (msg.optString("event")) {
@@ -117,7 +114,7 @@ class TvConnection(private val store: PairingStore, private val listener: Listen
                                         msg.optJSONObject("data")
                                             ?.optString("token")
                                             ?.takeIf { it.isNotBlank() }
-                                            ?.let { store.token(tv.ip, it) }
+                                            ?.let { store.token(tokenScope, it) }
                                         ready = true
                                         store.save(tv)
                                         listener.authorized(tv)

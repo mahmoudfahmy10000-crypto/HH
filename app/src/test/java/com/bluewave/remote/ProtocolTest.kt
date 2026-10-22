@@ -93,4 +93,16 @@ class ProtocolTest {
     fun rejectsInvalidMac() {
         Protocol.magicPacket("invalid")
     }
+
+    @Test
+    fun streamingShortcutsUseObservedAppIdsWithoutUrlsOrEmbeddedCredentials() {
+        for (name in listOf("YouTube", "Shahid", "MBC", "Yango Play")) {
+            val fixtureId = "test-id-for-$name"
+            val params = JSONObject(Protocol.launch(fixtureId)).getJSONObject("params")
+            assertEquals("ed.apps.launch", params.getString("event"))
+            assertEquals("host", params.getString("to"))
+            assertEquals(fixtureId, params.getJSONObject("data").getString("appId"))
+            assertEquals("DEEP_LINK", params.getJSONObject("data").getString("action_type"))
+        }
+    }
 }

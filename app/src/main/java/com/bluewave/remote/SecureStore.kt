@@ -129,7 +129,13 @@ class SecureStore(context: Context) : PairingStore {
 
     fun forget(ip: String) {
         write(saved().filterNot { it.ip == ip })
-        prefs.edit().remove("token:$ip").remove("pin:$ip").apply()
+        prefs
+            .edit()
+            .remove("token:$ip")
+            .remove("token:tls:$ip")
+            .remove("token:plain:$ip")
+            .remove("pin:$ip")
+            .apply()
         if (prefs.getString("last", null) == ip) prefs.edit().remove("last").apply()
     }
 

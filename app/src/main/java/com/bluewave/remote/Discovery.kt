@@ -15,6 +15,8 @@ class Discovery(context: Context) {
     private val http =
         OkHttpClient.Builder()
             .proxy(Proxy.NO_PROXY)
+            .followRedirects(false)
+            .followSslRedirects(false)
             .connectTimeout(2, TimeUnit.SECONDS)
             .readTimeout(2, TimeUnit.SECONDS)
             .build()
@@ -50,7 +52,7 @@ class Discovery(context: Context) {
                         try {
                             socket.receive(p)
                             val ip = p.address.hostAddress ?: continue
-                            if (Protocol.validIp(ip) && seen.add(ip)) candidates.add(ip)
+                            if (Protocol.localIp(ip) && seen.add(ip)) candidates.add(ip)
                         } catch (_: SocketTimeoutException) {}
                     }
                     candidates.take(64).map { ip -> async { inspect(ip)?.let(found) } }.awaitAll()
@@ -62,13 +64,17 @@ class Discovery(context: Context) {
 
     fun inspect(ip: String): Tv? =
         runCatching {
-                require(Protocol.validIp(ip))
+                require(Protocol.localIp(ip))
                 http
                     .newCall(Request.Builder().url("http://$ip:8001/api/v2/").build())
                     .execute()
                     .use { res ->
                         check(res.isSuccessful)
-                        val root = JSONObject(res.body!!.string())
+                        val body = requireNotNull(res.body)
+                        require(body.contentLength() <= 262144) { "TV metadata too large" }
+                        val source = body.source()
+                        require(!source.request(262145)) { "TV metadata too large" }
+                        val root = JSONObject(source.readUtf8())
                         val device = root.getJSONObject("device")
                         check(
                             device.toString().contains("samsung", true) ||

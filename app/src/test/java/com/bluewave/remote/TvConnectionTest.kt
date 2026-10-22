@@ -11,13 +11,15 @@ import org.junit.Test
 
 class TvConnectionTest {
     private class Store : PairingStore {
+        val tokens = mutableMapOf<String, String>()
         var value: String? = null
         var saved: Tv? = null
 
-        override fun token(ip: String) = value
+        override fun token(ip: String) = tokens[ip]
 
         override fun token(ip: String, value: String) {
             this.value = value
+            tokens[ip] = value
         }
 
         override fun pin(ip: String): String? = null
@@ -81,7 +83,7 @@ class TvConnectionTest {
                 )
         )
         server.start(8001)
-        val connection = TvConnection(store, events)
+        val connection = TvConnection(store, events, { it == "127.0.0.1" })
         try {
             connection.connect(Tv("127.0.0.1", secure = false))
             val request = server.takeRequest(5, TimeUnit.SECONDS)!!
@@ -125,7 +127,7 @@ class TvConnectionTest {
                 )
         )
         server.start(8001)
-        val connection = TvConnection(store, events)
+        val connection = TvConnection(store, events, { it == "127.0.0.1" })
         try {
             connection.connect(Tv("127.0.0.1", secure = false))
             assertTrue(events.denied.await(5, TimeUnit.SECONDS))
@@ -136,5 +138,67 @@ class TvConnectionTest {
             connection.disconnect()
             server.close()
         }
+    }
+
+    @Test
+    fun plaintextEndpointNeverReceivesTlsPairingToken() {
+        for (legacyToken in listOf(null, "plain-fixture-token")) {
+            val server = MockWebServer()
+            val store =
+                Store().apply {
+                    tokens["tls:127.0.0.1"] = "tls-fixture-token"
+                    if (legacyToken != null) tokens["plain:127.0.0.1"] = legacyToken
+                }
+            server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {}))
+            server.start(8001)
+            val connection = TvConnection(store, Events(), { it == "127.0.0.1" })
+            try {
+                connection.connect(Tv("127.0.0.1", secure = false))
+                val request = server.takeRequest(5, TimeUnit.SECONDS)!!
+                assertEquals(legacyToken, request.requestUrl!!.queryParameter("token"))
+                assertFalse(request.path!!.contains("tls-fixture-token"))
+            } finally {
+                connection.disconnect()
+                server.close()
+            }
+        }
+    }
+
+    @Test
+    fun redirectsCannotForwardPairingCredentials() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .addHeader("Location", "http://127.0.0.1:8001/unexpected")
+        )
+        server.enqueue(MockResponse().setResponseCode(401))
+        server.start(8001)
+        val failure = CountDownLatch(1)
+        val connection =
+            TvConnection(
+                Store(),
+                object : Events() {
+                    override fun disconnected(retry: Boolean) {
+                        failure.countDown()
+                    }
+                },
+                { it == "127.0.0.1" },
+            )
+        try {
+            connection.connect(Tv("127.0.0.1", secure = false))
+            assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            assertTrue(failure.await(5, TimeUnit.SECONDS))
+            assertEquals(1, server.requestCount)
+            assertFalse(connection.ready)
+        } finally {
+            connection.disconnect()
+            server.close()
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun productionConnectionRejectsPublicDestinationBeforeOpeningSocket() {
+        TvConnection(Store(), Events()).connect(Tv("8.8.8.8"))
     }
 }

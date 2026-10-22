@@ -3,3 +3,8 @@
 local.properties
 **/build/
 .idea/
+
+# Never commit private signing material.
+*.jks
+*.keystore
+*.p12

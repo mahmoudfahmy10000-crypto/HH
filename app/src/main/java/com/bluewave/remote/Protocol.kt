@@ -96,11 +96,26 @@ object Protocol {
         ip.split('.').let { p ->
             p.size == 4 &&
                 p.all {
-                    it.isNotEmpty() && it.all(Char::isDigit) && (it.toIntOrNull() ?: -1) in 0..255
+                    it.isNotEmpty() &&
+                        it.length <= 3 &&
+                        it.all { c -> c in '0'..'9' } &&
+                        (it.length == 1 || it[0] != '0') &&
+                        (it.toIntOrNull() ?: -1) in 0..255
                 } &&
                 p[0].toInt() in 1..223 &&
                 p[0].toInt() != 127
         }
+
+    // Restrict real discovery/manual/saved-device flows to local IPv4 destinations.
+    // Static Android cleartext domain rules cannot describe dynamically discovered LAN IPs.
+    fun localIp(ip: String): Boolean {
+        if (!validIp(ip)) return false
+        val p = ip.split('.').map(String::toInt)
+        return p[0] == 10 ||
+            (p[0] == 172 && p[1] in 16..31) ||
+            (p[0] == 192 && p[1] == 168) ||
+            (p[0] == 169 && p[1] == 254)
+    }
 
     fun magicPacket(mac: String): ByteArray {
         require(mac.matches(Regex("(?i)[0-9a-f]{2}([:-][0-9a-f]{2}){5}")))
