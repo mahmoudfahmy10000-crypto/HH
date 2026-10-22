@@ -39,11 +39,11 @@ assert 'application-debuggable' in badging
 package_line = next(line for line in badging.splitlines() if line.startswith('package:'))
 assert ' split=' not in package_line, 'Expected a standalone APK, not a split'
 permissions = sorted(re.findall(r"uses-permission: name='([^']+)'", badging))
-allowed = {'android.permission.INTERNET', 'android.permission.CHANGE_WIFI_MULTICAST_STATE',
+allowed = {'android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE', 'android.permission.CHANGE_WIFI_MULTICAST_STATE',
            'android.permission.TRANSMIT_IR',
            'com.bluewave.remote.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'}
 assert set(permissions) <= allowed, f'Unexpected packaged permissions: {set(permissions)-allowed}'
-assert {'android.permission.INTERNET', 'android.permission.CHANGE_WIFI_MULTICAST_STATE',
+assert {'android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE', 'android.permission.CHANGE_WIFI_MULTICAST_STATE',
         'android.permission.TRANSMIT_IR'} <= set(permissions)
 native = []
 with zipfile.ZipFile(apk) as z:
@@ -81,6 +81,8 @@ certificate_sha256 = re.search(r'Signer #1 certificate SHA-256 digest: (\S+)', s
 assert certificate_sha256
 summary = {'file': 'app-debug.apk', 'sha256': sha, 'size_bytes': apk.stat().st_size,
            'package': 'com.bluewave.remote', 'min_sdk': 26, 'target_sdk': 35,
+           'version_name': re.search(r"versionName='([^']+)'", package_line).group(1),
+           'version_code': int(re.search(r"versionCode='([^']+)'", package_line).group(1)),
            'standalone': True, 'debuggable': True, 'signature_v2': True, 'signature_v3': True,
            'signer_certificate_sha256': certificate_sha256.group(1),
            'permissions': permissions, 'zip_crc_valid': True,
@@ -93,9 +95,9 @@ if apk != out / 'app-debug.apk':
 (out / 'alignment.txt').write_text(alignment)
 (out / 'manifest-badging.txt').write_text(badging)
 (out / 'SHA256SUMS').write_text(sha+'  app-debug.apk\n')
-report = Path('SECURITY_AUDIT.md')
-if report.exists():
-    shutil.copy2(report, out / report.name)
+for report in [Path('SECURITY_AUDIT.md'), Path('AU7000_GUIDE.md')]:
+    if report.exists():
+        shutil.copy2(report, out / report.name)
 for evidence in Path('audit').glob('*.json'):
     shutil.copy2(evidence, out / evidence.name)
 print(json.dumps(summary, indent=2))

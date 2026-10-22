@@ -23,10 +23,13 @@ internal constructor(
 
         fun trustRequired(ip: String, fingerprint: String)
 
+        fun ime(event: TvImeEvent) {}
+
         fun disconnected(retry: Boolean)
     }
 
     private var socket: WebSocket? = null
+    @Volatile private var textAnnounced = false
     private var client: OkHttpClient? = null
     @Volatile private var generation = 0
     @Volatile
@@ -36,6 +39,7 @@ internal constructor(
     fun disconnect() {
         generation++
         ready = false
+        textAnnounced = false
         socket?.cancel()
         socket = null
         client?.dispatcher?.executorService?.shutdown()
@@ -45,6 +49,7 @@ internal constructor(
     fun connect(tv: Tv) {
         disconnect()
         require(destinationAllowed(tv.ip)) { "Only private LAN TV addresses are supported" }
+        require(!tv.remote || tv.secure) { "Remote access requires TLS" }
         val current = generation
         listener.status("Connecting to ${tv.ip}…", false)
         val builder =
@@ -109,6 +114,11 @@ internal constructor(
                         }
                         runCatching {
                                 val msg = JSONObject(text)
+                                ImeProtocol.parse(msg)?.let { event ->
+                                    if (event.kind != ImeKind.UPDATE) textAnnounced = false
+                                    if (ready) listener.ime(event)
+                                    return
+                                }
                                 when (msg.optString("event")) {
                                     "ms.channel.connect" -> {
                                         msg.optJSONObject("data")
@@ -155,7 +165,7 @@ internal constructor(
                                     }
                                     "ms.error" ->
                                         listener.status(
-                                            "TV API error: ${msg.optJSONObject("data")?.optString("message") ?: "command unsupported"}",
+                                            "TV reported ms.error; command or text may be unsupported. Check the TV field and model.",
                                             ready,
                                         )
                                 }
@@ -210,4 +220,22 @@ internal constructor(
     fun launch(id: String): Boolean = ready && socket?.send(Protocol.launch(id)) == true
 
     fun requestApps(): Boolean = ready && socket?.send(Protocol.appList()) == true
+
+    @Synchronized
+    fun sendText(text: String): Boolean {
+        val payload = ImeProtocol.text(text)
+        if (!ready) return false
+        if (!textAnnounced) {
+            if (socket?.send(ImeProtocol.announce()) != true) return false
+            textAnnounced = true
+        }
+        return socket?.send(payload) == true
+    }
+
+    @Synchronized
+    fun endText(): Boolean {
+        if (!ready) return false
+        textAnnounced = false
+        return socket?.send(ImeProtocol.end()) == true
+    }
 }

@@ -17,6 +17,7 @@ data class Tv(
     val name: String = "Samsung TV",
     val mac: String = "",
     val secure: Boolean = true,
+    val remote: Boolean = false,
 )
 
 data class TvApp(val id: String, val name: String)
@@ -95,6 +96,7 @@ class SecureStore(context: Context) : PairingStore {
                         t.getString("name"),
                         t.optString("mac"),
                         t.optBoolean("secure", true),
+                        t.optBoolean("remote", false),
                     )
                 }
             }
@@ -119,6 +121,7 @@ class SecureStore(context: Context) : PairingStore {
                                     .put("name", it.name)
                                     .put("mac", it.mac)
                                     .put("secure", it.secure)
+                                    .put("remote", it.remote)
                             )
                         }
                     }
@@ -137,6 +140,12 @@ class SecureStore(context: Context) : PairingStore {
             .remove("pin:$ip")
             .apply()
         if (prefs.getString("last", null) == ip) prefs.edit().remove("last").apply()
+    }
+
+    fun automaticKeyboard(): Boolean = prefs.getBoolean("automatic-keyboard", true)
+
+    fun automaticKeyboard(enabled: Boolean) {
+        prefs.edit().putBoolean("automatic-keyboard", enabled).apply()
     }
 
     fun last(): Tv? = saved().find { it.ip == prefs.getString("last", null) }

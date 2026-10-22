@@ -1,5 +1,7 @@
 # Samsung Universal Remote · Bluewave
 
+Version 1.1.0 feature branch adds authorized Remote VPN access and an Arabic/English smart keyboard. See [AU7000_GUIDE.md](AU7000_GUIDE.md) for required always-on home VPN infrastructure, protocol evidence, limitations and the physical-TV test matrix. AU7000 hardware results are not fabricated.
+
 A native Kotlin / Jetpack Compose Android remote. AMOLED surfaces, blue accents, accessible labeled controls, saved televisions, streaming shortcuts, swipe navigation, and real Consumer IR transmission. Android 8.0+; suitable for Redmi Note 14 when its firmware exposes the required hardware.
 
 ## Download and install using only your Android phone
@@ -18,7 +20,7 @@ Artifacts expire after 30 days; rerun the workflow for a new download. The APK i
 - Default: TLS WebSocket on port **8002**, `/api/v2/channels/samsung.remote.control`. Samsung TVs frequently have self-signed certificates. Check the TV IP on a trusted network, explicitly approve the displayed SHA-256 certificate, then choose **Allow** on the TV. Certificate changes require fresh approval. This is certificate pinning after first-use consent, not public-CA validation.
 - Legacy port **8001** is an explicit unencrypted option for compatible models. Pairing tokens and commands are exposed to the LAN in that mode; use only on a trusted network. No automatic TLS downgrade. TLS and legacy credentials now use separate storage namespaces; upgrading from 1.0.0 requires approving TV pairing again.
 - Only the TV's `ms.channel.connect` event marks the connection authorized and saves it. Tokens are encrypted using AES-GCM and an Android Keystore key. Backups are disabled. **Forget** removes saved credentials and the certificate pin.
-- Last authorized TV reconnects on app startup; transient failures retry three times with backoff. Pairing has a 35-second timeout. Denied pairing requires TV permission changes and manual retry. Foreground use is intended; there is no persistent background service.
+- Last authorized TV reconnects on app startup; transient failures retry three times with backoff. Pairing has a 35-second timeout. Denied pairing requires TV permission changes and manual retry. The socket pauses and drafts are cleared while the app is not resumed. Foreground use is intended; there is no persistent background service.
 
 Supported TVs expose Samsung's Tizen WebSocket remote API, typically 2016 onward. Older encrypted/PIN protocols, hotel restrictions, and models without this API are unsupported. A TV unavailable on both remote ports cannot be controlled through Wi-Fi by this application. Guest Wi-Fi isolation and firewalls can block local access. No physical Samsung TV was available in the cloud build environment; on-device interoperability must be checked with your TV.
 
@@ -51,7 +53,7 @@ GitHub Actions installs Java and the SDK, builds with the wrapper, runs unit tes
 
 ## Privacy and permissions
 
-No ads, analytics, account, cloud backend, or telemetry. Network traffic goes directly to the private LAN IP you select or local SSDP/Wake-on-LAN broadcasts. Permissions: internet/local networking, Wi-Fi multicast and Consumer IR transmission. Android View haptics do not require VIBRATE. No location, contacts, microphone, camera, storage, or notification permission. Local cleartext access is necessary for SSDP device-info HTTP and optional legacy WebSocket; secure remote mode remains the default. Use trusted LANs only.
+No ads, analytics, account, cloud backend, or telemetry. Network traffic goes directly to the private LAN IP you select or local SSDP/Wake-on-LAN broadcasts. Permissions: internet/local networking, network transport/VPN state, Wi-Fi multicast and Consumer IR transmission. Android View haptics do not require VIBRATE. No location, contacts, microphone, camera, storage, or notification permission. Local cleartext access is necessary for SSDP device-info HTTP and optional legacy WebSocket; secure remote mode remains the default. Use trusted LANs only.
 
 Independent project; not affiliated with Samsung or any streaming provider. Brand names identify supported shortcuts only. No official provider logos or copyrighted brand assets are bundled.
 
@@ -60,3 +62,5 @@ Independent project; not affiliated with Samsung or any streaming provider. Bran
 See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for the 1.0.1 audit, limitations, retained local-TV protocol risks and dependency advisory evidence. The artifact includes `SHA256SUMS`, `verification.json`, `signature.txt`, alignment evidence and the report, all generated for the APK inside that same archive. Run `ANDROID_HOME=/path/to/sdk python3 tools/verify_apk.py` after `./gradlew assembleDebug testDebugUnitTest lintDebug` to reproduce the binary checks.
 
 A debug certificate is self-signed and does not establish a verified publisher or Play Protect reputation. If Play Protect blocks the APK, stop installation; do not disable or override Play Protect. A successful build, signature verification or clean advisory lookup is not Google approval. Android 16 behavior still needs testing on real hardware.
+
+The Keyboard button supports manual input and compatible foreground IME events. Voice input is supplied by Gboard rather than an app microphone permission. Remote VPN requires a user-authorized home VPN gateway; the app never exposes TV ports publicly. See the AU7000 guide before using either feature.

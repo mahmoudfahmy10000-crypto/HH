@@ -54,7 +54,12 @@ object Protocol {
     }
 
     fun key(key: String): String {
-        require(key in irCodes || key == "KEY_POWERON" || key == "KEY_POWEROFF")
+        require(
+            key in irCodes ||
+                key == "KEY_POWERON" ||
+                key == "KEY_POWEROFF" ||
+                key == "KEY_BACKSPACE"
+        )
         return JSONObject()
             .put("method", "ms.remote.control")
             .put(

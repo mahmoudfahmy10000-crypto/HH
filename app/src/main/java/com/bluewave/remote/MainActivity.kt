@@ -28,6 +28,9 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlin.math.abs
@@ -52,6 +55,19 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun RemoteApp(vm: RemoteModel = viewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner, vm) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) vm.setForeground(true)
+            if (event == Lifecycle.Event.ON_PAUSE) vm.setForeground(false)
+        }
+        owner.lifecycle.addObserver(observer)
+        vm.setForeground(owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+        onDispose {
+            owner.lifecycle.removeObserver(observer)
+            vm.setForeground(false)
+        }
+    }
     var page by remember { mutableIntStateOf(0) }
     Scaffold(
         containerColor = RemoteColors.background,
@@ -142,6 +158,25 @@ private fun RemoteApp(vm: RemoteModel = viewModel()) {
                     )
                 }
             }
+            if (!s.ir) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FilterChip(
+                        selected = !s.remoteMode,
+                        onClick = { vm.remoteMode(false) },
+                        label = { Text("Local LAN") },
+                    )
+                    FilterChip(
+                        selected = s.remoteMode,
+                        onClick = { vm.remoteMode(true) },
+                        label = { Text("Remote VPN") },
+                    )
+                }
+                Text(
+                    "${if(s.remoteMode) "Remote VPN" else "Local LAN"} • ${s.network.summary}",
+                    color = Blue,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             if (s.feedback.isNotBlank())
                 Text(
                     s.feedback,
@@ -161,6 +196,7 @@ private fun RemoteApp(vm: RemoteModel = viewModel()) {
             Spacer(Modifier.height(12.dp))
         }
     }
+    if (s.keyboard.visible) KeyboardDialog(s.keyboard, vm)
     if (s.trustIp != null)
         AlertDialog(
             onDismissRequest = { vm.trust(false) },
@@ -353,6 +389,14 @@ private fun RemoteControls(s: RemoteState, vm: RemoteModel) {
             vm.send("KEY_FF")
         }
     }
+    KeyButton(
+        "Keyboard • Arabic / English",
+        Icons.Rounded.Keyboard,
+        Modifier.fillMaxWidth(),
+        true,
+    ) {
+        vm.openKeyboard()
+    }
     Text("STREAMING", style = MaterialTheme.typography.labelMedium, color = Blue)
     AppGrid(s, vm)
 }
@@ -496,16 +540,21 @@ private fun DevicesScreen(s: RemoteState, vm: RemoteModel) {
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
+    if (s.remoteMode)
+        Text(
+            "Remote VPN uses TLS 8002 only. Enable your authorized home VPN first; use the TV's saved home IP. Discovery multicast usually does not cross a VPN.",
+            color = Blue,
+        )
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Switch(secure, { secure = it })
+        Switch(if (s.remoteMode) true else secure, { secure = it }, enabled = !s.remoteMode)
         Spacer(Modifier.width(12.dp))
         Text(
-            if (secure) "TLS / port 8002 • certificate pinning"
+            if (secure || s.remoteMode) "TLS / port 8002 • certificate pinning"
             else "Legacy / port 8001 • unencrypted",
             color = Color.White,
         )
     }
-    if (!secure)
+    if (!secure && !s.remoteMode)
         Text(
             "Legacy mode sends commands and pairing tokens unencrypted. Use only on a trusted home network.",
             color = Color(0xFFFFC16E),
@@ -526,7 +575,11 @@ private fun TvRow(tv: Tv, connect: () -> Unit, forget: (() -> Unit)? = null) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(tv.name, color = Color.White)
-                Text(tv.ip, color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "${tv.ip} • ${if(tv.remote) "Remote VPN" else "Local LAN"}",
+                    color = Color.Gray,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             TextButton(onClick = connect) { Text("Connect") }
             if (forget != null)
@@ -537,6 +590,29 @@ private fun TvRow(tv: Tv, connect: () -> Unit, forget: (() -> Unit)? = null) {
 
 @Composable
 private fun SettingsScreen(s: RemoteState, vm: RemoteModel) {
+    Text("Keyboard preferences", style = MaterialTheme.typography.titleLarge, color = Color.White)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(s.keyboard.automatic, vm::automaticKeyboard)
+        Text(
+            "Automatic keyboard on supported TV IME events",
+            Modifier.padding(start = 12.dp),
+            color = Color.White,
+        )
+    }
+    Text(
+        "Automatic activation works only while this app is active. Missing IME events? Use the Keyboard button after selecting the TV field. Text is sent explicitly; unsupported apps may ignore it. Gboard handles language switching and voice typing; this app does not request microphone access.",
+        color = Color.Gray,
+    )
+    Text("Connection diagnostics", color = Blue)
+    Text(
+        "${s.network.summary}\nProfile: ${if(s.remoteMode) "Remote VPN (TLS required)" else "Local LAN"}\nTV: ${s.selected?.ip ?: "not selected"}\n${s.status}",
+        color = Color.Gray,
+    )
+    Text(
+        "Remote access requires an authenticated VPN on this phone and an always-on home router/NAS/computer acting as VPN server or subnet router. Configure a route to the TV's home subnet and allow only authorized VPN peers to reach TV TCP 8002. Never publicly forward TV ports 8001/8002. Android VPN presence does not verify its route or security; TV authorization and TLS certificate pinning are still required. Pair at home first. SmartThings is not assumed to provide remote keyboard or all remote keys.",
+        color = Color.Gray,
+    )
+
     Text("IR configuration", style = MaterialTheme.typography.titleLarge, color = Color.White)
     Text(
         if (s.hasIr)
@@ -572,7 +648,7 @@ private fun SettingsScreen(s: RemoteState, vm: RemoteModel) {
         color = Color.Gray,
     )
     Text(
-        "No account, cloud service, analytics, or internet connection is required by the app. Pairing tokens are encrypted with an Android Keystore key; backups are disabled. Forget a TV to remove its token and certificate pin. Connections retry up to three times while the app process is running.",
+        "Local Wi-Fi and IR need no account or cloud service. Remote VPN needs your configured internet/VPN infrastructure. No analytics are included. Pairing tokens are encrypted with an Android Keystore key; backups are disabled. Forget a TV to remove its token and certificate pin. Connections retry up to three times while the app process is running.",
         color = Color.Gray,
     )
     Text(

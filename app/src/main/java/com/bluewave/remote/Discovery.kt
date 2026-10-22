@@ -86,13 +86,19 @@ class Discovery(context: Context) {
             .getOrNull()
 
     companion object {
-        fun wake(mac: String) {
+        fun wake(mac: String, targetIp: String? = null) {
+            require(targetIp == null || Protocol.localIp(targetIp))
             val data = Protocol.magicPacket(mac)
             DatagramSocket().use { s ->
                 s.broadcast = true
                 repeat(3) {
                     s.send(
-                        DatagramPacket(data, data.size, InetAddress.getByName("255.255.255.255"), 9)
+                        DatagramPacket(
+                            data,
+                            data.size,
+                            InetAddress.getByName(targetIp ?: "255.255.255.255"),
+                            9,
+                        )
                     )
                 }
             }
