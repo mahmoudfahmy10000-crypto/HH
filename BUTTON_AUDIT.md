@@ -1,5 +1,7 @@
 # AU7000 full control audit and repair — 1.2.0
 
+> Latest: [1.2.1 keyboard visibility and app setup fixes](COMPATIBILITY_FIX.md). Physical TV compatibility remains unverified.
+
 Audit date: 2026-10-22. Existing application ID: `com.bluewave.remote`, versionCode **4**.
 Source baseline: `5bd7df381de5f95cd30b49ff81ce69ac0f8c3d8b`.
 Branch: `feature/au7000-button-power-audit`. The commit containing this report is the audited revision.

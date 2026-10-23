@@ -1,5 +1,7 @@
 # Samsung Universal Remote · Bluewave
 
+> Latest: [1.2.1 keyboard visibility and app setup fixes](COMPATIBILITY_FIX.md). Physical TV compatibility remains unverified.
+
 Version 1.1.0 feature branch adds authorized Remote VPN access and an Arabic/English smart keyboard. See [AU7000_GUIDE.md](AU7000_GUIDE.md) for required always-on home VPN infrastructure, protocol evidence, limitations and the physical-TV test matrix. AU7000 hardware results are not fabricated.
 
 A native Kotlin / Jetpack Compose Android remote. AMOLED surfaces, blue accents, accessible labeled controls, saved televisions, streaming shortcuts, swipe navigation, and real Consumer IR transmission. Android 8.0+; suitable for Redmi Note 14 when its firmware exposes the required hardware.

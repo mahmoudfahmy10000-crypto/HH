@@ -68,9 +68,14 @@ private fun RemoteApp(vm: RemoteModel = viewModel()) {
             vm.setForeground(false)
         }
     }
+    val messages = remember { SnackbarHostState() }
+    LaunchedEffect(s.feedback, s.feedbackSequence) {
+        if (s.feedback.isNotBlank()) messages.showSnackbar(s.feedback)
+    }
     var page by remember { mutableIntStateOf(0) }
     Scaffold(
         containerColor = RemoteColors.background,
+        snackbarHost = { SnackbarHost(messages) },
         bottomBar = {
             NavigationBar(containerColor = Color(0xFF0D1017)) {
                 listOf(
@@ -87,6 +92,13 @@ private fun RemoteApp(vm: RemoteModel = viewModel()) {
                             label = { Text(label) },
                         )
                     }
+                NavigationBarItem(
+                    selected = s.keyboard.visible,
+                    onClick = vm::openKeyboard,
+                    icon = { Icon(Icons.Rounded.Keyboard, "Keyboard") },
+                    label = { Text("Keyboard") },
+                    alwaysShowLabel = true,
+                )
             }
         },
     ) { padding ->
@@ -108,7 +120,7 @@ private fun RemoteApp(vm: RemoteModel = viewModel()) {
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        "Samsung Remote",
+                        "Samsung Remote • ${BuildConfig.VERSION_NAME}",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
@@ -391,13 +403,10 @@ private fun RemoteControls(s: RemoteState, vm: RemoteModel) {
             vm.send("KEY_FF")
         }
     }
-    KeyButton(
-        "Keyboard • Arabic / English",
-        Icons.Rounded.Keyboard,
-        Modifier.fillMaxWidth(),
-        true,
-    ) {
-        vm.openKeyboard()
+    Button(onClick = vm::openKeyboard, modifier = Modifier.fillMaxWidth()) {
+        Icon(Icons.Rounded.Keyboard, null)
+        Spacer(Modifier.width(8.dp))
+        Text("Keyboard • Arabic / English")
     }
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         listOf("KEY_EXIT", "KEY_GUIDE", "KEY_INFO").forEach { key ->
@@ -467,7 +476,12 @@ private fun AppsScreen(s: RemoteState, vm: RemoteModel) {
         Icon(Icons.Rounded.Refresh, null)
         Text(" Refresh installed apps")
     }
+    Text(
+        "If a branded button does not match your regional app, choose its shortcut below. This saves the actual TV app ID and launch type.",
+        color = Color.Gray,
+    )
     s.apps.forEach { app ->
+        var mapping by remember(app.id) { mutableStateOf(false) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { vm.launch(app) }, modifier = Modifier.weight(1f)) {
                 Text(
@@ -476,6 +490,20 @@ private fun AppsScreen(s: RemoteState, vm: RemoteModel) {
             }
             TextButton(onClick = { vm.toggleShortcut(app) }) {
                 Text(if (s.shortcuts.any { it.id == app.id }) "Unpin" else "Pin")
+            }
+            Box {
+                TextButton(onClick = { mapping = true }) { Text("Assign") }
+                DropdownMenu(expanded = mapping, onDismissRequest = { mapping = false }) {
+                    brands.forEach { brand ->
+                        DropdownMenuItem(
+                            text = { Text(brand) },
+                            onClick = {
+                                vm.assignShortcut(brand, app)
+                                mapping = false
+                            },
+                        )
+                    }
+                }
             }
         }
     }

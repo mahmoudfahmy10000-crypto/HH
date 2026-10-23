@@ -22,6 +22,7 @@ data class RemoteState(
     val connected: Boolean = false,
     val status: String = "Select a TV to connect",
     val feedback: String = "",
+    val feedbackSequence: Long = 0,
     val saved: List<Tv> = emptyList(),
     val discovered: List<Tv> = emptyList(),
     val scanning: Boolean = false,
@@ -61,6 +62,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     private val powerGate = PowerGate()
     private val sequence = java.util.concurrent.atomic.AtomicLong()
     private var appsTimeout: Job? = null
+    private val pendingAppLaunch = PendingAppLaunch()
 
     @Volatile private var foreground = false
     private val monitor =
@@ -78,7 +80,13 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
             feedback("Open the app before sending remote commands.")
             return false
         }
-        val tv = _state.value.selected ?: return false
+        val tv = _state.value.selected
+        if (tv == null) {
+            feedback(
+                "Open Devices and connect/pair your TV first. Apps and keyboard require Wi-Fi."
+            )
+            return false
+        }
         val error = networkError(tv)
         if (error != null) {
             suspendConnection(error)
@@ -89,6 +97,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     private fun suspendConnection(reason: String) {
+        pendingAppLaunch.clear()
         appsTimeout?.cancel()
         retry?.cancel()
         timeout?.cancel()
@@ -342,6 +351,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     fun mode(ir: Boolean) {
+        pendingAppLaunch.clear()
         if (ir) {
             appsTimeout?.cancel()
             allowReconnect = false
@@ -434,6 +444,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     fun connect(tv: Tv) {
+        pendingAppLaunch.clear()
         appsTimeout?.cancel()
         if (!Protocol.localIp(tv.ip)) {
             feedback("Only private LAN IPv4 TV addresses are supported.")
@@ -485,6 +496,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     fun disconnect() {
+        pendingAppLaunch.clear()
         appsTimeout?.cancel()
         allowReconnect = false
         retry?.cancel()
@@ -516,6 +528,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
         _state.update {
             it.copy(
                 feedback = result.detail,
+                feedbackSequence = it.feedbackSequence + 1,
                 diagnostics =
                     (listOf(
                             DiagnosticResult(
@@ -712,7 +725,9 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
 
     fun wake() = requestPower(PowerIntent.ON)
 
-    fun launch(app: TvApp) {
+    fun launch(app: TvApp) = launchResolved(app, true)
+
+    private fun launchResolved(app: TvApp, discoverIfMissing: Boolean) {
         val s = _state.value
         if (s.ir) {
             record(
@@ -726,8 +741,23 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
             return
         }
         if (!canCommand()) return
+        if (!s.connected || !connection.ready) {
+            feedback(
+                "Apps require an authorized Wi-Fi connection. Open Devices, connect, approve the TV prompt and wait for Connected."
+            )
+            return
+        }
         val resolved = AppLauncher.resolve(app, s.apps, s.shortcuts)
         val target = resolved.app
+        if (target == null && discoverIfMissing && s.apps.isEmpty() && s.connected) {
+            val ip = s.selected?.ip ?: return
+            if (!pendingAppLaunch.begin(ip, app))
+                return feedback("Waiting for the TV app list; no duplicate launch queued")
+            if (refreshApps())
+                feedback("Finding ${app.name} in the TV app list. No launch has been sent yet.")
+            else pendingAppLaunch.clear()
+            return
+        }
         val queued = target != null && connection.launch(target.id, target.launchType)
         record(
             app.name,
@@ -744,17 +774,19 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
 
     fun launchCustom(app: TvApp) = launch(app)
 
-    fun refreshApps() {
-        if (!canCommand()) return
+    fun refreshApps(): Boolean {
+        if (!canCommand()) return false
         appsTimeout?.cancel()
         if (!connection.requestApps()) {
+            pendingAppLaunch.clear()
             feedback("Connect to a TV first")
-            return
+            return false
         }
         feedback("Requested installed apps; awaiting actual response")
         appsTimeout =
             viewModelScope.launch {
                 delay(8000)
+                pendingAppLaunch.clear()
                 record(
                     "Installed apps",
                     DispatchResult(
@@ -764,6 +796,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
                     ),
                 )
             }
+        return true
     }
 
     fun diagnosticChecks() {
@@ -785,6 +818,16 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
             ),
         )
         if (s.connected) refreshApps()
+    }
+
+    fun assignShortcut(brand: String, app: TvApp) {
+        val list =
+            _state.value.shortcuts.filterNot {
+                AppLauncher.canonical(it.name) == AppLauncher.canonical(brand) || it.id == app.id
+            } + app.copy(name = brand)
+        store.shortcuts(list)
+        _state.update { it.copy(shortcuts = list) }
+        feedback("Assigned $brand to TV-reported app ${app.name}; tap its button to test")
     }
 
     fun saveShortcut(app: TvApp) {
@@ -810,6 +853,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
         _state.update {
             it.copy(
                 feedback = text,
+                feedbackSequence = it.feedbackSequence + 1,
                 keyboard =
                     if (it.keyboard.visible) it.keyboard.copy(message = text) else it.keyboard,
             )
@@ -870,6 +914,12 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
                     else "${apps.size} installed TV apps received",
             )
         }
+        viewModelScope.launch {
+            val current = _state.value
+            val request = current.selected?.ip?.let(pendingAppLaunch::consume)
+            if (request != null && foreground && current.connected && !current.ir)
+                launchResolved(request, false)
+        }
     }
 
     override fun trustRequired(ip: String, fingerprint: String) {
@@ -878,6 +928,7 @@ class RemoteModel(app: Application) : AndroidViewModel(app), TvConnection.Listen
     }
 
     override fun disconnected(retry: Boolean) {
+        pendingAppLaunch.clear()
         appsTimeout?.cancel()
         _state.update {
             it.copy(
